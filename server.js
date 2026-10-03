@@ -1,0 +1,535 @@
+import express from "express";
+import dotenv from "dotenv";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+dotenv.config();
+const app = express();
+app.use(express.json());
+app.use(express.static("public"));
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dataDir = path.join(__dirname, "data");
+const usersFile = path.join(dataDir, "users.json");
+const sessionsFile = path.join(dataDir, "sessions.json");
+const ordersFile = path.join(dataDir, "orders.json");
+const adminSessionsFile = path.join(dataDir, "admin_sessions.json");
+fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(usersFile)) fs.writeFileSync(usersFile, "[]");
+if (!fs.existsSync(sessionsFile)) fs.writeFileSync(sessionsFile, "{}");
+if (!fs.existsSync(ordersFile)) fs.writeFileSync(ordersFile, "[]");
+if (!fs.existsSync(adminSessionsFile)) fs.writeFileSync(adminSessionsFile, "{}");
+
+const PORT = process.env.PORT || 3000;
+const PRICE_PER_KM = Number(process.env.PRICE_PER_KM || 1.5);
+const MIN_PRICE = Number(process.env.MIN_PRICE || 15);
+const URGENT_PERCENT = Number(process.env.URGENT_PERCENT || 0.30);
+const WEIGHT_INCLUDED_KG = Number(process.env.WEIGHT_INCLUDED_KG || 20);
+const EXTRA_KG_PRICE = Number(process.env.EXTRA_KG_PRICE || 0);
+
+function readJson(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
+function writeJson(file, value) { fs.writeFileSync(file, JSON.stringify(value, null, 2)); }
+function cleanCep(v) { return String(v || "").replace(/\D/g, ""); }
+function cleanEmail(v) { return String(v || "").trim().toLowerCase(); }
+function money(v) { return Math.round(v * 100) / 100; }
+function token() { return crypto.randomBytes(32).toString("hex"); }
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+function verifyPassword(password, stored) {
+  const [salt, key] = String(stored).split(":");
+  if (!salt || !key) return false;
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(key, "hex"));
+}
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k) out[k] = decodeURIComponent(v.join("="));
+  }
+  return out;
+}
+function setSession(res, userId) {
+  const t = token();
+  const sessions = readJson(sessionsFile);
+  sessions[t] = { userId, createdAt: new Date().toISOString() };
+  writeJson(sessionsFile, sessions);
+  res.setHeader("Set-Cookie", `trindade_session=${encodeURIComponent(t)}; HttpOnly; SameSite=Lax; Path=/`);
+}
+function currentUser(req) {
+  const cookies = parseCookies(req);
+  const t = cookies.trindade_session;
+  if (!t) return null;
+  const sessions = readJson(sessionsFile);
+  const s = sessions[t];
+  if (!s) return null;
+  const users = readJson(usersFile);
+  return users.find(u => u.id === s.userId) || null;
+}
+function requireAuth(req, res, next) {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: "Faça login para continuar." });
+  req.user = user;
+  next();
+}
+
+function adminCredentials() {
+  return {
+    email: cleanEmail(process.env.ADMIN_EMAIL || ""),
+    password: String(process.env.ADMIN_PASSWORD || "")
+  };
+}
+function setAdminSession(res) {
+  const t = token();
+  const sessions = readJson(adminSessionsFile);
+  sessions[t] = { createdAt: new Date().toISOString() };
+  writeJson(adminSessionsFile, sessions);
+  res.setHeader("Set-Cookie", `trindade_admin_session=${encodeURIComponent(t)}; HttpOnly; SameSite=Lax; Path=/admin`);
+}
+function isAdmin(req) {
+  const cookies = parseCookies(req);
+  const t = cookies.trindade_admin_session;
+  if (!t) return false;
+  const sessions = readJson(adminSessionsFile);
+  return Boolean(sessions[t]);
+}
+function requireAdmin(req, res, next) {
+  if (!isAdmin(req)) return res.status(401).json({ error: "Acesso administrativo não autorizado." });
+  next();
+}
+
+app.post("/api/admin/login", (req, res) => {
+  const { email, senha } = req.body || {};
+  const cfg = adminCredentials();
+  if (!cfg.email || !cfg.password) return res.status(503).json({ error: "Administrador ainda não configurado. Crie o arquivo .env com ADMIN_EMAIL e ADMIN_PASSWORD." });
+  if (cleanEmail(email) !== cfg.email || String(senha || "") !== cfg.password) {
+    return res.status(401).json({ error: "E-mail ou senha administrativa incorretos." });
+  }
+  setAdminSession(res);
+  res.json({ ok: true });
+});
+
+app.post("/api/admin/logout", (req, res) => {
+  const cookies = parseCookies(req);
+  const t = cookies.trindade_admin_session;
+  if (t) { const sessions = readJson(adminSessionsFile); delete sessions[t]; writeJson(adminSessionsFile, sessions); }
+  res.setHeader("Set-Cookie", "trindade_admin_session=; HttpOnly; SameSite=Lax; Path=/admin; Max-Age=0");
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/me", (req, res) => {
+  res.json({ authenticated: isAdmin(req) });
+});
+
+app.get("/api/admin/orders", requireAdmin, (req, res) => {
+  const orders = readJson(ordersFile).slice().sort((a,b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+  res.json({ orders });
+});
+
+const ORDER_STATUSES = ["Aguardando pagamento", "Pagamento aprovado", "Coleta agendada", "Coletado", "Em trânsito", "Entregue", "Cancelado"];
+app.patch("/api/admin/orders/:id/status", requireAdmin, (req, res) => {
+  const status = String(req.body?.status || "");
+  if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ error: "Status inválido." });
+  const orders = readJson(ordersFile);
+  const order = orders.find(o => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: "Pedido não encontrado." });
+  order.status = status;
+  order.atualizadoEm = new Date().toISOString();
+  writeJson(ordersFile, orders);
+  res.json({ order });
+});
+
+app.get("/api/admin/stats", requireAdmin, (req, res) => {
+  const orders = readJson(ordersFile);
+  const total = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+  const entregues = orders.filter(o => o.status === "Entregue").length;
+  const pendentes = orders.filter(o => !["Entregue", "Cancelado"].includes(o.status)).length;
+  res.json({ totalPedidos: orders.length, valorTotal: money(total), entregues, pendentes });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { nome, cpfCnpj, whatsapp, email, senha } = req.body;
+    const name = String(nome || "").trim();
+    const mail = cleanEmail(email);
+    if (name.length < 3) return res.status(400).json({ error: "Informe seu nome completo." });
+    if (!mail.includes("@") || mail.length < 6) return res.status(400).json({ error: "Informe um e-mail válido." });
+    if (String(senha || "").length < 6) return res.status(400).json({ error: "A senha deve ter pelo menos 6 caracteres." });
+    if (!String(whatsapp || "").trim()) return res.status(400).json({ error: "Informe seu WhatsApp." });
+    const users = readJson(usersFile);
+    if (users.some(u => u.email === mail)) return res.status(409).json({ error: "Este e-mail já está cadastrado." });
+    const user = {
+      id: crypto.randomUUID(), nome: name, cpfCnpj: String(cpfCnpj || "").trim(),
+      whatsapp: String(whatsapp).trim(), email: mail, passwordHash: hashPassword(String(senha)),
+      createdAt: new Date().toISOString()
+    };
+    users.push(user); writeJson(usersFile, users); setSession(res, user.id);
+    res.status(201).json({ user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
+  } catch { res.status(500).json({ error: "Não foi possível criar sua conta." }); }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const { email, senha } = req.body;
+  const mail = cleanEmail(email);
+  const users = readJson(usersFile);
+  const user = users.find(u => u.email === mail);
+  if (!user || !verifyPassword(String(senha || ""), user.passwordHash)) {
+    return res.status(401).json({ error: "E-mail ou senha incorretos." });
+  }
+  setSession(res, user.id);
+  res.json({ user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const cookies = parseCookies(req);
+  const t = cookies.trindade_session;
+  if (t) { const sessions = readJson(sessionsFile); delete sessions[t]; writeJson(sessionsFile, sessions); }
+  res.setHeader("Set-Cookie", "trindade_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ authenticated: false });
+  res.json({ authenticated: true, user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
+});
+
+async function viaCep(cep) {
+  const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+  if (!r.ok) throw new Error("Falha ao consultar o CEP.");
+  const data = await r.json();
+  if (data.erro) throw new Error(`CEP não encontrado: ${cep}`);
+  return data;
+}
+async function geocode(address) {
+  const q = encodeURIComponent(`${address.logradouro}, ${address.localidade}, ${address.uf}, Brasil`);
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${q}`;
+  const r = await fetch(url, { headers: { "User-Agent": "TrindadeExpress/2.0 (cotacao)" } });
+  if (!r.ok) throw new Error("Não foi possível localizar o endereço no mapa.");
+  const data = await r.json();
+  if (!data.length) throw new Error("Endereço não localizado no mapa.");
+  return { lat: Number(data[0].lat), lon: Number(data[0].lon) };
+}
+async function route(a, b) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Falha ao calcular a rota.");
+  const data = await r.json();
+  if (data.code !== "Ok" || !data.routes?.length) throw new Error("Rota não encontrada.");
+  return { km: data.routes[0].distance / 1000, minutes: Math.round(data.routes[0].duration / 60) };
+}
+
+app.post("/api/quote", requireAuth, async (req, res) => {
+  try {
+    const { origemCep, destinoCep, peso, comprimento, largura, altura, servico, idaRetorno = true } = req.body;
+    const oCep = cleanCep(origemCep), dCep = cleanCep(destinoCep), kg = Number(peso);
+    if (oCep.length !== 8 || dCep.length !== 8 || !kg || kg <= 0) return res.status(400).json({ error: "Informe CEPs válidos e um peso maior que zero." });
+    const [origem, destino] = await Promise.all([viaCep(oCep), viaCep(dCep)]);
+    const [oGeo, dGeo] = await Promise.all([geocode(origem), geocode(destino)]);
+    const r = await route(oGeo, dGeo);
+    const kmTrecho = r.km, kmCobrado = idaRetorno ? kmTrecho * 2 : kmTrecho;
+    let base = Math.max(MIN_PRICE, kmCobrado * PRICE_PER_KM);
+    const extraKg = Math.max(0, kg - WEIGHT_INCLUDED_KG); base += extraKg * EXTRA_KG_PRICE;
+    const urgente = servico === "urgente", adicionalUrgente = urgente ? base * URGENT_PERCENT : 0;
+    const total = money(base + adicionalUrgente);
+    res.json({
+      cliente: { id: req.user.id, nome: req.user.nome },
+      origem: { cep: oCep, cidade: origem.localidade, uf: origem.uf },
+      destino: { cep: dCep, cidade: destino.localidade, uf: destino.uf },
+      distanciaTrechoKm: money(kmTrecho), distanciaCobradaKm: money(kmCobrado),
+      tempoEstimadoMin: r.minutes * (idaRetorno ? 2 : 1), pesoKg: kg,
+      dimensoesCm: { comprimento: Number(comprimento)||0, largura: Number(largura)||0, altura: Number(altura)||0 },
+      servico: urgente ? "Urgente" : "Programada", valorBase: money(base), adicionalUrgente: money(adicionalUrgente), total, moeda: "BRL"
+    });
+  } catch (e) { res.status(500).json({ error: e.message || "Erro ao calcular cotação." }); }
+});
+
+app.post("/api/orders", requireAuth, (req, res) => {
+  try {
+    const q = req.body?.quote;
+    if (!q || !q.total || !q.origem?.cep || !q.destino?.cep) {
+      return res.status(400).json({ error: "Cotação inválida para criar o pedido." });
+    }
+    const total = Number(q.total);
+    if (!Number.isFinite(total) || total <= 0) return res.status(400).json({ error: "Valor da cotação inválido." });
+    const orders = readJson(ordersFile);
+    const order = {
+      id: crypto.randomUUID(),
+      numero: `TE-${String(orders.length + 1).padStart(6, "0")}`,
+      userId: req.user.id,
+      cliente: { nome: req.user.nome, email: req.user.email, whatsapp: req.user.whatsapp },
+      origem: q.origem,
+      destino: q.destino,
+      distanciaTrechoKm: q.distanciaTrechoKm,
+      distanciaCobradaKm: q.distanciaCobradaKm,
+      tempoEstimadoMin: q.tempoEstimadoMin,
+      pesoKg: q.pesoKg,
+      dimensoesCm: q.dimensoesCm,
+      servico: q.servico,
+      valorBase: q.valorBase,
+      adicionalUrgente: q.adicionalUrgente,
+      total,
+      status: "Aguardando pagamento",
+      criadoEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString()
+    };
+    orders.push(order);
+    writeJson(ordersFile, orders);
+    res.status(201).json({ order });
+  } catch (e) {
+    res.status(500).json({ error: "Não foi possível criar o pedido." });
+  }
+});
+
+app.get("/api/orders", requireAuth, (req, res) => {
+  const orders = readJson(ordersFile).filter(o => o.userId === req.user.id);
+  res.json({ orders });
+});
+
+app.post("/api/payment/pix", requireAuth, async (req, res) => {
+  const tokenMP = process.env.MERCADOPAGO_ACCESS_TOKEN;
+
+  if (!tokenMP) {
+    return res.status(503).json({
+      error: "Mercado Pago ainda não configurado."
+    });
+  }
+
+  try {
+    const { amount, email, reference } = req.body;
+    const value = Number(amount);
+
+    if (!value || value <= 0 || !email) {
+      return res.status(400).json({
+        error: "Valor e e-mail são obrigatórios."
+      });
+    }
+
+    const idempotencyKey = crypto.randomUUID();
+
+    const mp = await fetch("https://api.mercadopago.com/v1/orders", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${tokenMP}`,
+        "X-Idempotency-Key": idempotencyKey
+      },
+      body: JSON.stringify({
+        type: "online",
+        processing_mode: "automatic",
+        total_amount: value.toFixed(2),
+        external_reference: reference || `TRINDADE-${Date.now()}`,
+        payer: {
+          email: email,
+          first_name: "APRO"
+        },
+        transactions: {
+          payments: [
+            {
+              amount: value.toFixed(2),
+              payment_method: {
+                id: "pix",
+                type: "bank_transfer"
+              }
+            }
+          ]
+        }
+      })
+    });
+
+    const data = await mp.json();
+
+    if (!mp.ok) {
+      return res.status(mp.status).json({
+        error: "Mercado Pago recusou a criação da order.",
+        details: data
+      });
+    }
+
+    const payment = data.transactions?.payments?.[0] || {};
+    const method = payment.payment_method || {};
+const orders = readJson(ordersFile);
+const pedido = orders.find(o => o.numero === reference);
+
+if (pedido) {
+  pedido.mercadoPagoOrderId = data.id;
+  pedido.pagamentoStatus = payment.status || data.status;
+  pedido.atualizadoEm = new Date().toISOString();
+  writeJson(ordersFile, orders);
+}
+    res.json({
+      orderId: data.id,
+      status: payment.status || data.status,
+      statusDetail: payment.status_detail || data.status_detail,
+      qrCode: method.qr_code || null,
+      qrCodeBase64: method.qr_code_base64 || null,
+      ticketUrl: method.ticket_url || null
+    });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({
+      error: "Erro ao criar order PIX."
+    });
+  }
+});
+
+// CONSULTAR STATUS DO PAGAMENTO NO MERCADO PAGO
+app.get("/api/payment/status/:numero", requireAuth, async (req, res) => {
+  const tokenMP = process.env.MERCADOPAGO_ACCESS_TOKEN;
+
+  if (!tokenMP) {
+    return res.status(503).json({
+      error: "Mercado Pago ainda não configurado."
+    });
+  }
+
+  try {
+    const orders = readJson(ordersFile);
+    const pedido = orders.find(
+      o => o.numero === req.params.numero && o.userId === req.user.id
+    );
+
+    if (!pedido) {
+      return res.status(404).json({
+        error: "Pedido não encontrado."
+      });
+    }
+
+    if (!pedido.mercadoPagoOrderId) {
+      return res.status(400).json({
+        error: "Este pedido ainda não possui pagamento PIX."
+      });
+    }
+
+    const mp = await fetch(
+      `https://api.mercadopago.com/v1/orders/${pedido.mercadoPagoOrderId}`,
+      {
+        headers: {
+          "Authorization": `Bearer ${tokenMP}`
+        }
+      }
+    );
+
+    const data = await mp.json();
+
+    if (!mp.ok) {
+      return res.status(mp.status).json({
+        error: "Não foi possível consultar o Mercado Pago.",
+        details: data
+      });
+    }
+
+    const payment = data.transactions?.payments?.[0] || {};
+    const pagamentoStatus = payment.status || data.status;
+
+    pedido.pagamentoStatus = pagamentoStatus;
+    pedido.atualizadoEm = new Date().toISOString();
+
+    if (
+      pagamentoStatus === "approved" ||
+      data.status === "processed"
+    ) {
+      pedido.status = "Pagamento aprovado";
+    }
+
+    writeJson(ordersFile, orders);
+
+    res.json({
+      pedido: pedido.numero,
+      status: pedido.status,
+      pagamentoStatus: pedido.pagamentoStatus,
+      mercadoPagoStatus: data.status,
+      mercadoPagoStatusDetail:
+        payment.status_detail || data.status_detail || null
+    });
+
+  } catch (e) {
+    console.error(e);
+
+    res.status(500).json({
+      error: "Erro ao consultar status do pagamento."
+    });
+  }
+});
+
+// WEBHOOK MERCADO PAGO
+app.post("/api/webhook/mercadopago", async (req, res) => {
+  try {
+    // Responde rapidamente ao Mercado Pago
+    res.sendStatus(200);
+
+    const orderId =
+      req.body?.data?.id ||
+      req.query?.["data.id"];
+
+    if (!orderId) {
+      console.log("Webhook recebido sem Order ID.");
+      return;
+    }
+
+    console.log("Webhook Mercado Pago - Order:", orderId);
+
+    const tokenMP = process.env.MERCADOPAGO_ACCESS_TOKEN;
+
+    if (!tokenMP) {
+      console.log("Token do Mercado Pago não configurado.");
+      return;
+    }
+
+    const mp = await fetch(
+      `https://api.mercadopago.com/v1/orders/${orderId}`,
+      {
+        headers: {
+          "Authorization": `Bearer ${tokenMP}`
+        }
+      }
+    );
+
+    const data = await mp.json();
+
+    if (!mp.ok) {
+      console.error("Erro ao consultar Order:", data);
+      return;
+    }
+
+    const payment = data.transactions?.payments?.[0] || {};
+    const pagamentoStatus = payment.status || data.status;
+
+    const orders = readJson(ordersFile);
+
+    const pedido = orders.find(
+      o => o.mercadoPagoOrderId === orderId
+    );
+
+    if (!pedido) {
+      console.log("Pedido local não encontrado para Order:", orderId);
+      return;
+    }
+
+    pedido.pagamentoStatus = pagamentoStatus;
+    pedido.atualizadoEm = new Date().toISOString();
+
+    if (
+      pagamentoStatus === "approved" ||
+      data.status === "processed"
+    ) {
+      pedido.status = "Pagamento aprovado";
+    }
+
+    writeJson(ordersFile, orders);
+
+    console.log(
+      `Pedido ${pedido.numero} atualizado: ${pedido.status}`
+    );
+
+  } catch (e) {
+    console.error("Erro no webhook Mercado Pago:", e);
+  }
+});
+
+app.listen(PORT, () => console.log(`Trindade Express em http://localhost:${PORT}`));
