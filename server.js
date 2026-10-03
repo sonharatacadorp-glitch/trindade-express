@@ -199,11 +199,29 @@ app.get("/api/auth/me", (req, res) => {
 });
 
 async function viaCep(cep) {
-  const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-  if (!r.ok) throw new Error("Falha ao consultar o CEP.");
-  const data = await r.json();
-  if (data.erro) throw new Error(`CEP não encontrado: ${cep}`);
-  return data;
+  try {
+    console.log("Consultando ViaCEP:", cep);
+
+    const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+
+    console.log("ViaCEP respondeu com HTTP:", r.status);
+
+    if (!r.ok) {
+      throw new Error(`ViaCEP respondeu HTTP ${r.status}`);
+    }
+
+    const data = await r.json();
+
+    if (data.erro) {
+      throw new Error(`CEP não encontrado: ${cep}`);
+    }
+
+    return data;
+
+  } catch (e) {
+    console.error("ERRO VIACEP:", e);
+    throw new Error(`Falha ViaCEP: ${e.message}`);
+  }
 }
 async function geocode(address) {
   const q = encodeURIComponent(`${address.logradouro}, ${address.localidade}, ${address.uf}, Brasil`);
@@ -219,7 +237,7 @@ async function route(a, b) {
   const r = await fetch(url);
   if (!r.ok) throw new Error("Falha ao calcular a rota.");
   const data = await r.json();
-  if (data.code !== "Ok" || !data.routes?.length) throw new Error("Rota não encontrada.");
+  if (data.code !== "Ok" || !data.routes?.length) throw new Error("Rota não enasync function viaCepcontrada.");
   return { km: data.routes[0].distance / 1000, minutes: Math.round(data.routes[0].duration / 60) };
 }
 
