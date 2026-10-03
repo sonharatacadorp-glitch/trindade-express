@@ -220,6 +220,7 @@ async function viaCep(cep) {
 
   } catch (e) {
     console.error("ERRO VIACEP:", e);
+    console.error("CAUSA VIACEP:", e.cause);
     throw new Error(`Falha ViaCEP: ${e.message}`);
   }
 }
