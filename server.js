@@ -12,6 +12,9 @@ const { Pool } = pg;
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+db.query("SELECT NOW()")
+  .then(() => console.log("PostgreSQL conectado com sucesso"))
+  .catch((erro) => console.error("Erro ao conectar PostgreSQL:", erro.message));
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
