@@ -1,11 +1,17 @@
 import express from "express";
 import dotenv from "dotenv";
+import pg from "pg";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 dotenv.config();
+const { Pool } = pg;
+
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
@@ -13,7 +19,7 @@ app.use(express.static("public"));
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, "data");
 const usersFile = path.join(dataDir, "users.json");
-const sessionsFile = path.join(dataDir, "sessions.json");230
+const sessionsFile = path.join(dataDir, "sessions.json");
 
 const ordersFile = path.join(dataDir, "orders.json");
 const adminSessionsFile = path.join(dataDir, "admin_sessions.json");
