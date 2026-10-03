@@ -202,7 +202,7 @@ async function viaCep(cep) {
   try {
     console.log("Consultando ViaCEP:", cep);
 
-    const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const r = await fetch(`https://brasilapi.com.br/api/cep/v1/${cep}`);
 
     console.log("ViaCEP respondeu com HTTP:", r.status);
 
@@ -211,7 +211,10 @@ async function viaCep(cep) {
     }
 
     const data = await r.json();
-
+data.localidade = data.city;
+data.uf = data.state;
+data.logradouro = data.street || "";
+data.bairro = data.neighborhood || "";
     if (data.erro) {
       throw new Error(`CEP não encontrado: ${cep}`);
     }
@@ -224,10 +227,10 @@ async function viaCep(cep) {
     throw new Error(`Falha ViaCEP: ${e.message}`);
   }
 }
-async function geocode(address) {
+(address) {
   const q = encodeURIComponent(`${address.logradouro}, ${address.localidade}, ${address.uf}, Brasil`);
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${q}`;
-  const r = await fetch(url, { headers: { "User-Agent": "TrindadeExpress/2.0 (cotacao)" } });
+  const r async function geocode= await fetch(url, { headers: { "User-Agent": "TrindadeExpress/2.0 (cotacao)" } });
   if (!r.ok) throw new Error("Não foi possível localizar o endereço no mapa.");
   const data = await r.json();
   if (!data.length) throw new Error("Endereço não localizado no mapa.");
