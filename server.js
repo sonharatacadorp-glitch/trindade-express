@@ -13,7 +13,8 @@ app.use(express.static("public"));
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, "data");
 const usersFile = path.join(dataDir, "users.json");
-const sessionsFile = path.join(dataDir, "sessions.json");
+const sessionsFile = path.join(dataDir, "sessions.json");230
+
 const ordersFile = path.join(dataDir, "orders.json");
 const adminSessionsFile = path.join(dataDir, "admin_sessions.json");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -227,24 +228,55 @@ data.bairro = data.neighborhood || "";
     throw new Error(`Falha ViaCEP: ${e.message}`);
   }
 }
-(address) {
-  const q = encodeURIComponent(`${address.logradouro}, ${address.localidade}, ${address.uf}, Brasil`);
+async function geocode(address) {
+  const q = encodeURIComponent(
+    `${address.logradouro}, ${address.localidade}, ${address.uf}, Brasil`
+  );
+
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${q}`;
-  const r async function geocode= await fetch(url, { headers: { "User-Agent": "TrindadeExpress/2.0 (cotacao)" } });
-  if (!r.ok) throw new Error("Não foi possível localizar o endereço no mapa.");
+
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": "TrindadeExpress/2.0 (cotacao)"
+    }
+  });
+
+  if (!r.ok) {
+    throw new Error("Não foi possível localizar o endereço no mapa.");
+  }
+
   const data = await r.json();
-  if (!data.length) throw new Error("Endereço não localizado no mapa.");
-  return { lat: Number(data[0].lat), lon: Number(data[0].lon) };
-}
-async function route(a, b) {
-  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("Falha ao calcular a rota.");
-  const data = await r.json();
-  if (data.code !== "Ok" || !data.routes?.length) throw new Error("Rota não enasync function viaCepcontrada.");
-  return { km: data.routes[0].distance / 1000, minutes: Math.round(data.routes[0].duration / 60) };
+
+  if (!data.length) {
+    throw new Error("Endereço não localizado no mapa.");
+  }
+
+  return {
+    lat: Number(data[0].lat),
+    lon: Number(data[0].lon)
+  };
 }
 
+async function route(a, b) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
+
+  const r = await fetch(url);
+
+  if (!r.ok) {
+    throw new Error("Falha ao calcular a rota.");
+  }
+
+  const data = await r.json();
+
+  if (data.code !== "Ok" || !data.routes?.length) {
+    throw new Error("Rota não encontrada.");
+  }
+
+  return {
+    km: data.routes[0].distance / 1000,
+    minutes: Math.round(data.routes[0].duration / 60)
+  };
+}
 app.post("/api/quote", requireAuth, async (req, res) => {
   try {
     const { origemCep, destinoCep, peso, comprimento, largura, altura, servico, idaRetorno = true } = req.body;
