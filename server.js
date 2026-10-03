@@ -245,7 +245,10 @@ app.post("/api/quote", requireAuth, async (req, res) => {
       dimensoesCm: { comprimento: Number(comprimento)||0, largura: Number(largura)||0, altura: Number(altura)||0 },
       servico: urgente ? "Urgente" : "Programada", valorBase: money(base), adicionalUrgente: money(adicionalUrgente), total, moeda: "BRL"
     });
-  } catch (e) { res.status(500).json({ error: e.message || "Erro ao calcular cotação." }); }
+} catch (e) {
+  console.error("ERRO NA COTACAO:", e);
+  res.status(500).json({ error: e.message || "Erro ao calcular cotação." });
+}
 });
 
 app.post("/api/orders", requireAuth, (req, res) => {
