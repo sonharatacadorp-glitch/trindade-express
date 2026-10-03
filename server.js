@@ -29,6 +29,15 @@ db.query("SELECT NOW()")
   .then(() => console.log("Tabela users pronta"))
   .catch((erro) => console.error("Erro ao criar tabela users:", erro.message));
   db.query(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    criado_em TIMESTAMPTZ DEFAULT NOW()
+  )
+`)
+  .then(() => console.log("Tabela sessions pronta"))
+  .catch((erro) => console.error("Erro ao criar tabela sessions:", erro.message));
+  db.query(`
   CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
     numero TEXT UNIQUE NOT NULL,
