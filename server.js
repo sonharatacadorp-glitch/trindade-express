@@ -28,6 +28,32 @@ db.query("SELECT NOW()")
 `)
   .then(() => console.log("Tabela users pronta"))
   .catch((erro) => console.error("Erro ao criar tabela users:", erro.message));
+  db.query(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY,
+    numero TEXT UNIQUE NOT NULL,
+    user_id TEXT NOT NULL,
+    cliente JSONB NOT NULL,
+    origem JSONB NOT NULL,
+    destino JSONB NOT NULL,
+    distancia_trecho_km NUMERIC,
+    distancia_cobrada_km NUMERIC,
+    tempo_estimado_min INTEGER,
+    peso_kg NUMERIC,
+    dimensoes_cm JSONB,
+    servico JSONB,
+    valor_base NUMERIC,
+    adicional_urgente NUMERIC,
+    total NUMERIC NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Aguardando pagamento',
+    mercado_pago_order_id TEXT,
+    pagamento_status TEXT,
+    criado_em TIMESTAMPTZ DEFAULT NOW(),
+    atualizado_em TIMESTAMPTZ DEFAULT NOW()
+  )
+`)
+  .then(() => console.log("Tabela orders pronta"))
+  .catch((erro) => console.error("Erro ao criar tabela orders:", erro.message));
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
