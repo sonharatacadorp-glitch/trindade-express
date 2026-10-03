@@ -228,8 +228,11 @@ app.post("/api/quote", requireAuth, async (req, res) => {
     const { origemCep, destinoCep, peso, comprimento, largura, altura, servico, idaRetorno = true } = req.body;
     const oCep = cleanCep(origemCep), dCep = cleanCep(destinoCep), kg = Number(peso);
     if (oCep.length !== 8 || dCep.length !== 8 || !kg || kg <= 0) return res.status(400).json({ error: "Informe CEPs válidos e um peso maior que zero." });
+    console.log("TESTE: iniciando consulta ViaCEP");
     const [origem, destino] = await Promise.all([viaCep(oCep), viaCep(dCep)]);
+    console.log("TESTE: ViaCEP funcionou. Iniciando geocode");
     const [oGeo, dGeo] = await Promise.all([geocode(origem), geocode(destino)]);
+    console.log("TESTE: geocode funcionou. Iniciando cálculo da rota");
     const r = await route(oGeo, dGeo);
     const kmTrecho = r.km, kmCobrado = idaRetorno ? kmTrecho * 2 : kmTrecho;
     let base = Math.max(MIN_PRICE, kmCobrado * PRICE_PER_KM);
