@@ -28,6 +28,10 @@ db.query("SELECT NOW()")
 
   ALTER TABLE users ADD COLUMN IF NOT EXISTS cpf_cnpj TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+  ALTER TABLE users ALTER COLUMN id DROP DEFAULT;
+ALTER TABLE users ALTER COLUMN id TYPE TEXT USING id::text;
+ALTER TABLE users DROP COLUMN IF EXISTS password_salt;
+ALTER TABLE users DROP COLUMN IF EXISTS telefone;
 `)
   .then(() => console.log("Tabela users pronta"))
   .catch((erro) => console.error("Erro ao criar/ajustar tabela users:", erro.message));
@@ -114,28 +118,55 @@ function parseCookies(req) {
   }
   return out;
 }
-function setSession(res, userId) {
+async function setSession(res, userId) {
   const t = token();
-  const sessions = readJson(sessionsFile);
-  sessions[t] = { userId, createdAt: new Date().toISOString() };
-  writeJson(sessionsFile, sessions);
-  res.setHeader("Set-Cookie", `trindade_session=${encodeURIComponent(t)}; HttpOnly; SameSite=Lax; Path=/`);
+
+  await db.query(
+    "INSERT INTO sessions (token, user_id) VALUES ($1, $2)",
+    [t, userId]
+  );
+
+  res.setHeader(
+    "Set-Cookie",
+    `trindade_session=${encodeURIComponent(t)}; HttpOnly; SameSite=Lax; Path=/`
+  );
 }
-function currentUser(req) {
+async function currentUser(req) {
   const cookies = parseCookies(req);
   const t = cookies.trindade_session;
+
   if (!t) return null;
-  const sessions = readJson(sessionsFile);
-  const s = sessions[t];
-  if (!s) return null;
-  const users = readJson(usersFile);
-  return users.find(u => u.id === s.userId) || null;
+
+  const result = await db.query(`
+    SELECT
+      u.id,
+      u.nome,
+      u.cpf_cnpj AS "cpfCnpj",
+      u.whatsapp,
+      u.email
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token = $1
+    LIMIT 1
+  `, [t]);
+
+  return result.rows[0] || null;
 }
-function requireAuth(req, res, next) {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: "Faça login para continuar." });
-  req.user = user;
-  next();
+
+async function requireAuth(req, res, next) {
+  try {
+    const user = await currentUser(req);
+
+    if (!user) {
+      return res.status(401).json({ error: "Faça login para continuar." });
+    }
+
+    req.user = user;
+    next();
+  } catch (erro) {
+    console.error("Erro ao validar sessão:", erro);
+    res.status(500).json({ error: "Erro ao validar sessão." });
+  }
 }
 
 function adminCredentials() {
@@ -212,51 +243,164 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
   res.json({ totalPedidos: orders.length, valorTotal: money(total), entregues, pendentes });
 });
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
     const { nome, cpfCnpj, whatsapp, email, senha } = req.body;
+
     const name = String(nome || "").trim();
     const mail = cleanEmail(email);
-    if (name.length < 3) return res.status(400).json({ error: "Informe seu nome completo." });
-    if (!mail.includes("@") || mail.length < 6) return res.status(400).json({ error: "Informe um e-mail válido." });
-    if (String(senha || "").length < 6) return res.status(400).json({ error: "A senha deve ter pelo menos 6 caracteres." });
-    if (!String(whatsapp || "").trim()) return res.status(400).json({ error: "Informe seu WhatsApp." });
-    const users = readJson(usersFile);
-    if (users.some(u => u.email === mail)) return res.status(409).json({ error: "Este e-mail já está cadastrado." });
+    const whats = String(whatsapp || "").trim();
+
+    if (name.length < 3) {
+      return res.status(400).json({ error: "Informe seu nome completo." });
+    }
+
+    if (!mail.includes("@") || mail.length < 6) {
+      return res.status(400).json({ error: "Informe um e-mail válido." });
+    }
+
+    if (String(senha || "").length < 6) {
+      return res.status(400).json({ error: "A senha deve ter pelo menos 6 caracteres." });
+    }
+
+    if (!whats) {
+      return res.status(400).json({ error: "Informe seu WhatsApp." });
+    }
+
+    const existente = await db.query(
+      "SELECT id FROM users WHERE email = $1 LIMIT 1",
+      [mail]
+    );
+
+    if (existente.rows.length) {
+      return res.status(409).json({ error: "Este e-mail já está cadastrado." });
+    }
+
     const user = {
-      id: crypto.randomUUID(), nome: name, cpfCnpj: String(cpfCnpj || "").trim(),
-      whatsapp: String(whatsapp).trim(), email: mail, passwordHash: hashPassword(String(senha)),
-      createdAt: new Date().toISOString()
+      id: crypto.randomUUID(),
+      nome: name,
+      cpfCnpj: String(cpfCnpj || "").trim(),
+      whatsapp: whats,
+      email: mail,
+      passwordHash: hashPassword(String(senha))
     };
-    users.push(user); writeJson(usersFile, users); setSession(res, user.id);
-    res.status(201).json({ user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
-  } catch { res.status(500).json({ error: "Não foi possível criar sua conta." }); }
-});
 
-app.post("/api/auth/login", (req, res) => {
-  const { email, senha } = req.body;
-  const mail = cleanEmail(email);
-  const users = readJson(usersFile);
-  const user = users.find(u => u.email === mail);
-  if (!user || !verifyPassword(String(senha || ""), user.passwordHash)) {
-    return res.status(401).json({ error: "E-mail ou senha incorretos." });
+    await db.query(
+      `INSERT INTO users
+       (id, nome, cpf_cnpj, whatsapp, email, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        user.id,
+        user.nome,
+        user.cpfCnpj,
+        user.whatsapp,
+        user.email,
+        user.passwordHash
+      ]
+    );
+
+    await setSession(res, user.id);
+
+    res.status(201).json({
+      user: {
+        id: user.id,
+        nome: user.nome,
+        email: user.email,
+        whatsapp: user.whatsapp
+      }
+    });
+  } catch (erro) {
+    console.error("Erro ao criar conta:", erro);
+    res.status(500).json({ error: "Não foi possível criar sua conta." });
   }
-  setSession(res, user.id);
-  res.json({ user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
 });
 
-app.post("/api/auth/logout", (req, res) => {
-  const cookies = parseCookies(req);
-  const t = cookies.trindade_session;
-  if (t) { const sessions = readJson(sessionsFile); delete sessions[t]; writeJson(sessionsFile, sessions); }
-  res.setHeader("Set-Cookie", "trindade_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
-  res.json({ ok: true });
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, senha } = req.body;
+    const mail = cleanEmail(email);
+
+    const result = await db.query(
+      `SELECT
+        id,
+        nome,
+        cpf_cnpj AS "cpfCnpj",
+        whatsapp,
+        email,
+        password_hash AS "passwordHash"
+       FROM users
+       WHERE email = $1
+       LIMIT 1`,
+      [mail]
+    );
+
+    const user = result.rows[0];
+
+    if (!user || !verifyPassword(String(senha || ""), user.passwordHash)) {
+      return res.status(401).json({ error: "E-mail ou senha incorretos." });
+    }
+
+    await setSession(res, user.id);
+
+    res.json({
+      user: {
+        id: user.id,
+        nome: user.nome,
+        email: user.email,
+        whatsapp: user.whatsapp
+      }
+    });
+  } catch (erro) {
+    console.error("Erro ao fazer login:", erro);
+    res.status(500).json({ error: "Não foi possível fazer login." });
+  }
 });
 
-app.get("/api/auth/me", (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ authenticated: false });
-  res.json({ authenticated: true, user: { id: user.id, nome: user.nome, email: user.email, whatsapp: user.whatsapp } });
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const cookies = parseCookies(req);
+    const t = cookies.trindade_session;
+
+    if (t) {
+      await db.query(
+        "DELETE FROM sessions WHERE token = $1",
+        [t]
+      );
+    }
+
+    res.setHeader(
+      "Set-Cookie",
+      "trindade_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    );
+
+    res.json({ ok: true });
+  } catch (erro) {
+    console.error("Erro ao sair da conta:", erro);
+    res.status(500).json({ error: "Não foi possível sair da conta." });
+  }
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    const user = await currentUser(req);
+
+    if (!user) {
+      return res.status(401).json({ authenticated: false });
+    }
+
+    res.json({
+      authenticated: true,
+      user: {
+        id: user.id,
+        nome: user.nome,
+        email: user.email,
+        whatsapp: user.whatsapp
+      }
+    });
+  } catch (erro) {
+    console.error("Erro ao consultar usuário:", erro);
+    res.status(500).json({ error: "Não foi possível consultar o usuário." });
+  }
 });
 
 async function viaCep(cep) {
