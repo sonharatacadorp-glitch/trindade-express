@@ -15,6 +15,19 @@ const db = new Pool({
 db.query("SELECT NOW()")
   .then(() => console.log("PostgreSQL conectado com sucesso"))
   .catch((erro) => console.error("Erro ao conectar PostgreSQL:", erro.message));
+  db.query(`
+  CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    telefone TEXT,
+    criado_em TIMESTAMPTZ DEFAULT NOW()
+  )
+`)
+  .then(() => console.log("Tabela users pronta"))
+  .catch((erro) => console.error("Erro ao criar tabela users:", erro.message));
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
