@@ -17,17 +17,20 @@ db.query("SELECT NOW()")
   .catch((erro) => console.error("Erro ao conectar PostgreSQL:", erro.message));
   db.query(`
   CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     nome TEXT NOT NULL,
+    cpf_cnpj TEXT,
+    whatsapp TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL,
-    telefone TEXT,
     criado_em TIMESTAMPTZ DEFAULT NOW()
-  )
+  );
+
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS cpf_cnpj TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp TEXT;
 `)
   .then(() => console.log("Tabela users pronta"))
-  .catch((erro) => console.error("Erro ao criar tabela users:", erro.message));
+  .catch((erro) => console.error("Erro ao criar/ajustar tabela users:", erro.message));
   db.query(`
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
