@@ -559,5 +559,28 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
     console.error("Erro no webhook Mercado Pago:", e);
   }
 });
+app.get("/api/health", async (req, res) => {
+  const resultados = {};
 
+  for (const [nome, url] of [
+    ["google", "https://www.google.com"],
+    ["brasilapi", "https://brasilapi.com.br/api/cep/v1/14020000"]
+  ]) {
+    try {
+      const r = await fetch(url);
+      resultados[nome] = {
+        ok: r.ok,
+        status: r.status
+      };
+    } catch (e) {
+      resultados[nome] = {
+        ok: false,
+        erro: e.message,
+        causa: e.cause?.code || null
+      };
+    }
+  }
+
+  res.json(resultados);
+});
 app.listen(PORT, () => console.log(`Trindade Express em http://localhost:${PORT}`));
