@@ -35,7 +35,7 @@ ALTER TABLE users DROP COLUMN IF EXISTS telefone;
 `)
   .then(() => console.log("Tabela users pronta"))
   .catch((erro) => console.error("Erro ao criar/ajustar tabela users:", erro.message));
-  db.query(`app.post("/api/orders"
+  db.query(`
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
