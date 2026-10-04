@@ -35,7 +35,7 @@ ALTER TABLE users DROP COLUMN IF EXISTS telefone;
 `)
   .then(() => console.log("Tabela users pronta"))
   .catch((erro) => console.error("Erro ao criar/ajustar tabela users:", erro.message));
-  db.query(`
+  db.query(`app.post("/api/orders"
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -57,7 +57,7 @@ ALTER TABLE users DROP COLUMN IF EXISTS telefone;
     tempo_estimado_min INTEGER,
     peso_kg NUMERIC,
     dimensoes_cm JSONB,
-    servico JSONB,
+    servico TEXT,
     valor_base NUMERIC,
     adicional_urgente NUMERIC,
     total NUMERIC NOT NULL,
@@ -66,7 +66,11 @@ ALTER TABLE users DROP COLUMN IF EXISTS telefone;
     pagamento_status TEXT,
     criado_em TIMESTAMPTZ DEFAULT NOW(),
     atualizado_em TIMESTAMPTZ DEFAULT NOW()
-  )
+  );
+
+ALTER TABLE orders
+ALTER COLUMN servico TYPE TEXT
+USING servico::text;
 `)
   .then(() => console.log("Tabela orders pronta"))
   .catch((erro) => console.error("Erro ao criar tabela orders:", erro.message));
@@ -217,30 +221,119 @@ app.get("/api/admin/me", (req, res) => {
   res.json({ authenticated: isAdmin(req) });
 });
 
-app.get("/api/admin/orders", requireAdmin, (req, res) => {
-  const orders = readJson(ordersFile).slice().sort((a,b) => new Date(b.criadoEm) - new Date(a.criadoEm));
-  res.json({ orders });
+app.get("/api/admin/orders", requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        id,
+        numero,
+        user_id AS "userId",
+        cliente,
+        origem,
+        destino,
+        distancia_trecho_km AS "distanciaTrechoKm",
+        distancia_cobrada_km AS "distanciaCobradaKm",
+        tempo_estimado_min AS "tempoEstimadoMin",
+        peso_kg AS "pesoKg",
+        dimensoes_cm AS "dimensoesCm",
+        servico,
+        valor_base AS "valorBase",
+        adicional_urgente AS "adicionalUrgente",
+        total,
+        status,
+        mercado_pago_order_id AS "mercadoPagoOrderId",
+        pagamento_status AS "pagamentoStatus",
+        criado_em AS "criadoEm",
+        atualizado_em AS "atualizadoEm"
+      FROM orders
+      ORDER BY criado_em DESC
+    `);
+
+    res.json({ orders: result.rows });
+  } catch (erro) {
+    console.error("Erro ao consultar pedidos no admin:", erro);
+    res.status(500).json({
+      error: "Não foi possível consultar os pedidos."
+    });
+  }
 });
 
 const ORDER_STATUSES = ["Aguardando pagamento", "Pagamento aprovado", "Coleta agendada", "Coletado", "Em trânsito", "Entregue", "Cancelado"];
-app.patch("/api/admin/orders/:id/status", requireAdmin, (req, res) => {
-  const status = String(req.body?.status || "");
-  if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ error: "Status inválido." });
-  const orders = readJson(ordersFile);
-  const order = orders.find(o => o.id === req.params.id);
-  if (!order) return res.status(404).json({ error: "Pedido não encontrado." });
-  order.status = status;
-  order.atualizadoEm = new Date().toISOString();
-  writeJson(ordersFile, orders);
-  res.json({ order });
+app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
+  try {
+    const status = String(req.body?.status || "");
+
+    if (!ORDER_STATUSES.includes(status)) {
+      return res.status(400).json({ error: "Status inválido." });
+    }
+
+    const result = await db.query(
+      `UPDATE orders
+       SET
+         status = $1,
+         atualizado_em = NOW()
+       WHERE id = $2
+       RETURNING
+         id,
+         numero,
+         user_id AS "userId",
+         cliente,
+         origem,
+         destino,
+         total,
+         status,
+         pagamento_status AS "pagamentoStatus",
+         criado_em AS "criadoEm",
+         atualizado_em AS "atualizadoEm"`,
+      [status, req.params.id]
+    );
+
+    const order = result.rows[0];
+
+    if (!order) {
+      return res.status(404).json({
+        error: "Pedido não encontrado."
+      });
+    }
+
+    res.json({ order });
+  } catch (erro) {
+    console.error("Erro ao atualizar status do pedido:", erro);
+    res.status(500).json({
+      error: "Não foi possível atualizar o status do pedido."
+    });
+  }
 });
 
-app.get("/api/admin/stats", requireAdmin, (req, res) => {
-  const orders = readJson(ordersFile);
-  const total = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-  const entregues = orders.filter(o => o.status === "Entregue").length;
-  const pendentes = orders.filter(o => !["Entregue", "Cancelado"].includes(o.status)).length;
-  res.json({ totalPedidos: orders.length, valorTotal: money(total), entregues, pendentes });
+app.get("/api/admin/stats", requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        COUNT(*)::INTEGER AS "totalPedidos",
+        COALESCE(SUM(total), 0) AS "valorTotal",
+        COUNT(*) FILTER (
+          WHERE status = 'Entregue'
+        )::INTEGER AS entregues,
+        COUNT(*) FILTER (
+          WHERE status NOT IN ('Entregue', 'Cancelado')
+        )::INTEGER AS pendentes
+      FROM orders
+    `);
+
+    const stats = result.rows[0];
+
+    res.json({
+      totalPedidos: stats.totalPedidos,
+      valorTotal: money(Number(stats.valorTotal)),
+      entregues: stats.entregues,
+      pendentes: stats.pendentes
+    });
+  } catch (erro) {
+    console.error("Erro ao consultar estatísticas:", erro);
+    res.status(500).json({
+      error: "Não foi possível consultar as estatísticas."
+    });
+  }
 });
 
 app.post("/api/auth/register", async (req, res) => {
@@ -512,20 +605,50 @@ app.post("/api/quote", requireAuth, async (req, res) => {
 }
 });
 
-app.post("/api/orders", requireAuth, (req, res) => {
+app.post("/api/orders", requireAuth, async (req, res) => {
   try {
     const q = req.body?.quote;
+
     if (!q || !q.total || !q.origem?.cep || !q.destino?.cep) {
-      return res.status(400).json({ error: "Cotação inválida para criar o pedido." });
+      return res.status(400).json({
+        error: "Cotação inválida para criar o pedido."
+      });
     }
+
     const total = Number(q.total);
-    if (!Number.isFinite(total) || total <= 0) return res.status(400).json({ error: "Valor da cotação inválido." });
-    const orders = readJson(ordersFile);
+
+    if (!Number.isFinite(total) || total <= 0) {
+      return res.status(400).json({
+        error: "Valor da cotação inválido."
+      });
+    }
+
+    const numeroResult = await db.query(`
+      SELECT COALESCE(
+        MAX(
+          CASE
+            WHEN numero ~ '^TE-[0-9]+$'
+            THEN SUBSTRING(numero FROM 4)::INTEGER
+            ELSE 0
+          END
+        ),
+        0
+      ) + 1 AS proximo
+      FROM orders
+    `);
+
+    const proximo = Number(numeroResult.rows[0].proximo);
+    const numero = `TE-${String(proximo).padStart(6, "0")}`;
+
     const order = {
       id: crypto.randomUUID(),
-      numero: `TE-${String(orders.length + 1).padStart(6, "0")}`,
+      numero,
       userId: req.user.id,
-      cliente: { nome: req.user.nome, email: req.user.email, whatsapp: req.user.whatsapp },
+      cliente: {
+        nome: req.user.nome,
+        email: req.user.email,
+        whatsapp: req.user.whatsapp
+      },
       origem: q.origem,
       destino: q.destino,
       distanciaTrechoKm: q.distanciaTrechoKm,
@@ -541,17 +664,138 @@ app.post("/api/orders", requireAuth, (req, res) => {
       criadoEm: new Date().toISOString(),
       atualizadoEm: new Date().toISOString()
     };
-    orders.push(order);
-    writeJson(ordersFile, orders);
+
+    await db.query(
+      `INSERT INTO orders (
+        id,
+        numero,
+        user_id,
+        cliente,
+        origem,
+        destino,
+        distancia_trecho_km,
+        distancia_cobrada_km,
+        tempo_estimado_min,
+        peso_kg,
+        dimensoes_cm,
+        servico,
+        valor_base,
+        adicional_urgente,
+        total,
+        status,
+        criado_em,
+        atualizado_em
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17, $18
+      )`,
+      [
+        order.id,
+        order.numero,
+        order.userId,
+        order.cliente,
+        order.origem,
+        order.destino,
+        order.distanciaTrechoKm,
+        order.distanciaCobradaKm,
+        order.tempoEstimadoMin,
+        order.pesoKg,
+        order.dimensoesCm,
+        order.servico,
+        order.valorBase,
+        order.adicionalUrgente,
+        order.total,
+        order.status,
+        order.criadoEm,
+        order.atualizadoEm
+      ]
+    );
+
     res.status(201).json({ order });
-  } catch (e) {
-    res.status(500).json({ error: "Não foi possível criar o pedido." });
+  } catch (erro) {
+    console.error("Erro ao criar pedido:", erro);
+    res.status(500).json({
+      error: "Não foi possível criar o pedido."
+    });
   }
 });
 
-app.get("/api/orders", requireAuth, (req, res) => {
-  const orders = readJson(ordersFile).filter(o => o.userId === req.user.id);
-  res.json({ orders });
+app.get("/api/orders", requireAuth, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT
+        id,
+        numero,
+        user_id AS "userId",
+        cliente,
+        origem,
+        destino,
+        distancia_trecho_km AS "distanciaTrechoKm",
+        distancia_cobrada_km AS "distanciaCobradaKm",
+        tempo_estimado_min AS "tempoEstimadoMin",
+        peso_kg AS "pesoKg",
+        dimensoes_cm AS "dimensoesCm",
+        servico,
+        valor_base AS "valorBase",
+        adicional_urgente AS "adicionalUrgente",
+        total,
+        status,
+        mercado_pago_order_id AS "mercadoPagoOrderId",
+        pagamento_status AS "pagamentoStatus",
+        criado_em AS "criadoEm",
+        atualizado_em AS "atualizadoEm"
+       FROM orders
+       WHERE user_id = $1
+       ORDER BY criado_em DESC`,
+      [req.user.id]
+    );
+
+    res.json({ orders: result.rows });
+  } catch (erro) {
+    console.error("Erro ao consultar pedidos:", erro);
+    res.status(500).json({
+      error: "Não foi possível consultar seus pedidos."
+    });
+  }
+});app.get("/api/orders", requireAuth, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT
+        id,
+        numero,
+        user_id AS "userId",
+        cliente,
+        origem,
+        destino,
+        distancia_trecho_km AS "distanciaTrechoKm",
+        distancia_cobrada_km AS "distanciaCobradaKm",
+        tempo_estimado_min AS "tempoEstimadoMin",
+        peso_kg AS "pesoKg",
+        dimensoes_cm AS "dimensoesCm",
+        servico,
+        valor_base AS "valorBase",
+        adicional_urgente AS "adicionalUrgente",
+        total,
+        status,
+        mercado_pago_order_id AS "mercadoPagoOrderId",
+        pagamento_status AS "pagamentoStatus",
+        criado_em AS "criadoEm",
+        atualizado_em AS "atualizadoEm"
+       FROM orders
+       WHERE user_id = $1
+       ORDER BY criado_em DESC`,
+      [req.user.id]
+    );
+
+    res.json({ orders: result.rows });
+  } catch (erro) {
+    console.error("Erro ao consultar pedidos:", erro);
+    res.status(500).json({
+      error: "Não foi possível consultar seus pedidos."
+    });
+  }
 });
 
 app.post("/api/payment/pix", requireAuth, async (req, res) => {
@@ -616,15 +860,21 @@ app.post("/api/payment/pix", requireAuth, async (req, res) => {
 
     const payment = data.transactions?.payments?.[0] || {};
     const method = payment.payment_method || {};
-const orders = readJson(ordersFile);
-const pedido = orders.find(o => o.numero === reference);
-
-if (pedido) {
-  pedido.mercadoPagoOrderId = data.id;
-  pedido.pagamentoStatus = payment.status || data.status;
-  pedido.atualizadoEm = new Date().toISOString();
-  writeJson(ordersFile, orders);
-}
+await db.query(
+  `UPDATE orders
+   SET
+     mercado_pago_order_id = $1,
+     pagamento_status = $2,
+     atualizado_em = NOW()
+   WHERE numero = $3
+     AND user_id = $4`,
+  [
+    data.id,
+    payment.status || data.status,
+    reference,
+    req.user.id
+  ]
+);
     res.json({
       orderId: data.id,
       status: payment.status || data.status,
@@ -653,10 +903,22 @@ app.get("/api/payment/status/:numero", requireAuth, async (req, res) => {
   }
 
   try {
-    const orders = readJson(ordersFile);
-    const pedido = orders.find(
-      o => o.numero === req.params.numero && o.userId === req.user.id
-    );
+  const pedidoResult = await db.query(
+  `SELECT
+     id,
+     numero,
+     user_id AS "userId",
+     mercado_pago_order_id AS "mercadoPagoOrderId",
+     pagamento_status AS "pagamentoStatus",
+     status
+   FROM orders
+   WHERE numero = $1
+     AND user_id = $2
+   LIMIT 1`,
+  [req.params.numero, req.user.id]
+);
+
+const pedido = pedidoResult.rows[0];
 
     if (!pedido) {
       return res.status(404).json({
@@ -689,19 +951,30 @@ app.get("/api/payment/status/:numero", requireAuth, async (req, res) => {
     }
 
     const payment = data.transactions?.payments?.[0] || {};
-    const pagamentoStatus = payment.status || data.status;
+const pagamentoStatus = payment.status || data.status;
 
-    pedido.pagamentoStatus = pagamentoStatus;
-    pedido.atualizadoEm = new Date().toISOString();
+const novoStatus =
+  pagamentoStatus === "approved" ||
+  data.status === "processed"
+    ? "Pagamento aprovado"
+    : pedido.status;
 
-    if (
-      pagamentoStatus === "approved" ||
-      data.status === "processed"
-    ) {
-      pedido.status = "Pagamento aprovado";
-    }
+await db.query(
+  `UPDATE orders
+   SET
+     pagamento_status = $1,
+     status = $2,
+     atualizado_em = NOW()
+   WHERE id = $3`,
+  [
+    pagamentoStatus,
+    novoStatus,
+    pedido.id
+  ]
+);
 
-    writeJson(ordersFile, orders);
+pedido.pagamentoStatus = pagamentoStatus;
+pedido.status = novoStatus;
 
     res.json({
       pedido: pedido.numero,
@@ -801,28 +1074,45 @@ res.sendStatus(200);
     const payment = data.transactions?.payments?.[0] || {};
     const pagamentoStatus = payment.status || data.status;
 
-    const orders = readJson(ordersFile);
+    const pedidoResult = await db.query(
+  `SELECT
+     id,
+     numero,
+     status
+   FROM orders
+   WHERE mercado_pago_order_id = $1
+   LIMIT 1`,
+  [String(orderId)]
+);
 
-    const pedido = orders.find(
-      o => o.mercadoPagoOrderId === orderId
-    );
+const pedido = pedidoResult.rows[0];
 
-    if (!pedido) {
-      console.log("Pedido local não encontrado para Order:", orderId);
-      return;
-    }
+if (!pedido) {
+  console.log("Pedido local não encontrado para Order:", orderId);
+  return;
+}
 
-    pedido.pagamentoStatus = pagamentoStatus;
-    pedido.atualizadoEm = new Date().toISOString();
+const novoStatus =
+  pagamentoStatus === "approved" ||
+  data.status === "processed"
+    ? "Pagamento aprovado"
+    : pedido.status;
 
-    if (
-      pagamentoStatus === "approved" ||
-      data.status === "processed"
-    ) {
-      pedido.status = "Pagamento aprovado";
-    }
+await db.query(
+  `UPDATE orders
+   SET
+     pagamento_status = $1,
+     status = $2,
+     atualizado_em = NOW()
+   WHERE id = $3`,
+  [
+    pagamentoStatus,
+    novoStatus,
+    pedido.id
+  ]
+);
 
-    writeJson(ordersFile, orders);
+pedido.status = novoStatus;
 
     console.log(
       `Pedido ${pedido.numero} atualizado: ${pedido.status}`
