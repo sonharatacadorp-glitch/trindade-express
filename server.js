@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import pg from "pg";
+import { WebhookSignatureValidator, InvalidWebhookSignatureError } from "mercadopago";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1000,40 +1001,31 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
 const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 const xSignature = req.headers["x-signature"];
 const xRequestId = req.headers["x-request-id"];
-const dataId = String(req.query?.["data.id"] || req.body?.data?.id || "").toLowerCase();
+const dataId = String(
+  req.query?.["data.id"] || req.body?.data?.id || ""
+).toLowerCase();
+
 if (!secret || !xSignature || !xRequestId || !dataId) {
   console.error("Webhook sem dados necessários para validar assinatura.");
   return res.sendStatus(401);
 }
 
-let ts = "";
-let v1 = "";
+try {
+  WebhookSignatureValidator.validate({
+    signature: xSignature,
+    requestId: xRequestId,
+    dataID: dataId,
+    secret
+  });
+} catch (erro) {
+  if (erro instanceof InvalidWebhookSignatureError) {
+    console.error("Webhook Mercado Pago com assinatura inválida.");
+  } else {
+    console.error("Erro ao validar webhook Mercado Pago:", erro.message);
+  }
 
-for (const parte of xSignature.split(",")) {
-  const [chave, valor] = parte.split("=");
-  if (chave?.trim() === "ts") ts = valor?.trim() || "";
-  if (chave?.trim() === "v1") v1 = valor?.trim() || "";
-}
-
-const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-
-const assinaturaCalculada = crypto
-  .createHmac("sha256", secret)
-  .update(manifest)
-  .digest("hex");
-
-const assinaturaValida =
-  v1.length === assinaturaCalculada.length &&
-  crypto.timingSafeEqual(
-    Buffer.from(v1),
-    Buffer.from(assinaturaCalculada)
-  );
-
-if (!assinaturaValida) {
-  console.error("Webhook Mercado Pago com assinatura inválida.");
   return res.sendStatus(401);
 }
-
 res.sendStatus(200);
 
     const orderId =
