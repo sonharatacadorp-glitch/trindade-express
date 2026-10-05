@@ -53,10 +53,24 @@ async function renderPedidos(){
     const d=await api('/api/orders');
     if(d.orders && d.orders.length > 0) $('pay').classList.remove('hidden');
     if(!d.orders.length){$('ordersList').textContent='Nenhum pedido criado ainda.';return;}
-    $('ordersList').innerHTML=d.orders.slice().reverse().map(o=>`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0"><strong>${o.numero}</strong><br><small>${o.criadoEm?new Date(o.criadoEm).toLocaleString('pt-BR'):''}</small><div class="row"><span>Status</span><strong>${o.status}</strong></div><div class="row"><span>Rota</span><strong>${o.origem.cidade}/${o.origem.uf} → ${o.destino.cidade}/${o.destino.uf}</strong></div><div class="row"><span>Valor</span><strong>${brl(o.total)}</strong></div></div>`).join('');
-  }catch(e){$('ordersList').textContent='Não foi possível carregar seus pedidos.';}
+    $('ordersList').innerHTML=d.orders.slice().reverse().map(o=>`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0"><strong>${o.numero}</strong><br><small>${o.criadoEm?new Date(o.criadoEm).toLocaleString('pt-BR'):''}</small><div class="row"><span>Status</span><strong>${o.status}</strong></div><div class="row"><span>Rota</span><strong>${o.origem.cidade}/${o.origem.uf} → ${o.destino.cidade}/${o.destino.uf}</strong></div><div class="row"><span>Valor</span><strong>${brl(o.total)}</strong></div>${o.status==='Aguardando pagamento' ? `<br><button onclick="verificarPagamento('${o.numero}')">VERIFICAR PAGAMENTO</button>` : ''}</div>`).join('');
+      }catch(e){$('ordersList').textContent='Não foi possível carregar seus pedidos.';}
 }
+async function verificarPagamento(numero){
+  try{
+    const d = await api(`/api/payment/status/${numero}`);
 
+    alert(
+      `Pedido: ${d.pedido}\n` +
+      `Status: ${d.status}\n` +
+      `Pagamento: ${d.pagamentoStatus || '-'}`
+    );
+
+    await renderPedidos();
+  }catch(e){
+    alert('Erro ao verificar pagamento: ' + e.message);
+  }
+}
 async function pagar(){
   $('payerr').textContent = '';
   $('pixout').classList.add('hidden');
