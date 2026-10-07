@@ -1001,7 +1001,7 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
 const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 const xSignature = req.headers["x-signature"];
 const xRequestId = req.headers["x-request-id"];
-const dataId = req.query?.["data.id"];
+const dataId = String(req.query?.["data.id"] || "").toLowerCase();
 
 if (!secret || !xSignature || !xRequestId || !dataId) {
   console.error("Webhook sem dados necessários para validar assinatura.");
