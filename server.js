@@ -538,7 +538,7 @@ async function geocode(address) {
       "User-Agent": "TrindadeExpress/2.0 (cotacao)"
     }
   });
-
+console.log("Nominatim status:", r.status, "endereco:", address.localidade, address.uf);
   if (!r.ok) {
     throw new Error("Não foi possível localizar o endereço no mapa.");
   }
