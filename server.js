@@ -861,8 +861,7 @@ app.post("/api/payment/pix", requireAuth, async (req, res) => {
 
     const payment = data.transactions?.payments?.[0] || {};
     const method = payment.payment_method || {};
-await db.query(
-  `UPDATE orders
+const updatePedido = await db.query(  `UPDATE orders
    SET
      mercado_pago_order_id = $1,
      pagamento_status = $2,
@@ -875,6 +874,14 @@ await db.query(
     reference,
     req.user.id
   ]
+);
+console.log(
+  "PIX salvo no pedido:",
+  reference,
+  "Order MP:",
+  data.id,
+  "linhas atualizadas:",
+  updatePedido.rowCount
 );
     res.json({
       orderId: data.id,
