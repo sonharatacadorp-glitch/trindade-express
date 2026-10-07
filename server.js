@@ -1011,12 +1011,12 @@ if (!secret || !xSignature || !xRequestId || !dataId) {
 }
 
 try {
-  WebhookSignatureValidator.validate({
-    signature: xSignature,
-    requestId: xRequestId,
-    dataID: dataId,
-    secret
-  });
+WebhookSignatureValidator.validate({
+  xSignature: xSignature,
+  xRequestId: xRequestId,
+  dataId: dataId,
+  secret
+});
 } catch (erro) {
   if (erro instanceof InvalidWebhookSignatureError) {
     console.error("Webhook Mercado Pago com assinatura inválida.");
