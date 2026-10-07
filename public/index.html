@@ -82,11 +82,9 @@ async function pagar(){
       throw new Error('Nenhum pedido encontrado para pagamento.');
     }
 
-    const pedido = pedidos.orders
-      .slice()
-      .reverse()
-      .find(p => p.status === 'Aguardando pagamento') || pedidos.orders[pedidos.orders.length - 1];
-
+    const pedido =
+  pedidos.orders.find(p => p.status === 'Aguardando pagamento') ||
+  pedidos.orders[0];
     const d = await api('/api/payment/pix', {
       method: 'POST',
       body: JSON.stringify({
