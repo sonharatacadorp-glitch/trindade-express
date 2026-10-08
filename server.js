@@ -1035,7 +1035,7 @@ WebhookSignatureValidator.validate({
 });
 } catch (erro) {
   if (erro instanceof InvalidWebhookSignatureError) {
-    console.error("Webhook Mercado Pago com assinatura inválida.");
+    console.error("Webhook Mercado Pago rejeitado. Motivo:", erro.reason);
   } else {
     console.error("Erro ao validar webhook Mercado Pago:", erro.message);
   }
