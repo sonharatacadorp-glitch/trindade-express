@@ -1008,7 +1008,7 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
 const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 const xSignature = req.headers["x-signature"];
 const xRequestId = req.headers["x-request-id"];
-const dataId = String(req.query?.["data.id"] || "").toLowerCase();
+const dataId = String(req.query?.["data.id"] || "");
 console.log("Formato da notificacao:", {
   metodo: req.method,
   caminho: req.path,
