@@ -1009,6 +1009,13 @@ const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 const xSignature = req.headers["x-signature"];
 const xRequestId = req.headers["x-request-id"];
 const dataId = String(req.query?.["data.id"] || "").toLowerCase();
+console.log("Formato da notificacao:", {
+  metodo: req.method,
+  caminho: req.path,
+  parametrosUrl: Object.keys(req.query || {}),
+  tipoEvento: req.body?.type || "(ausente)",
+  acao: req.body?.action || "(ausente)"
+});
 console.log("Diagnostico webhook:", {
   possuiAssinatura: Boolean(xSignature),
   possuiRequestId: Boolean(xRequestId),
