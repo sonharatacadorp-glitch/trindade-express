@@ -53,7 +53,11 @@ async function renderPedidos(){
     const d=await api('/api/orders');
     if(d.orders && d.orders.length > 0) $('pay').classList.remove('hidden');
     if(!d.orders.length){$('ordersList').textContent='Nenhum pedido criado ainda.';return;}
-    $('ordersList').innerHTML=d.orders.slice().reverse().map(o=>`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0"><strong>${o.numero}</strong><br><small>${o.criadoEm?new Date(o.criadoEm).toLocaleString('pt-BR'):''}</small><div class="row"><span>Status</span><strong>${o.status}</strong></div><div class="row"><span>Rota</span><strong>${o.origem.cidade}/${o.origem.uf} → ${o.destino.cidade}/${o.destino.uf}</strong></div><div class="row"><span>Valor</span><strong>${brl(o.total)}</strong></div>${o.status==='Aguardando pagamento' ? `<br><button onclick="verificarPagamento('${o.numero}')">VERIFICAR PAGAMENTO</button>` : ''}</div>`).join('');
+    $('ordersList').innerHTML=d.orders.slice().reverse().map(o=>`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0"><strong>${o.numero}</strong><br><small>${o.criadoEm?new Date(o.criadoEm).toLocaleString('pt-BR'):''}</small><div class="row"><span>Status</span><strong>${o.status}</strong></div><div class="row"><span>Rota</span><strong>${o.origem.cidade}/${o.origem.uf} → ${o.destino.cidade}/${o.destino.uf}</strong></div><div class="row"><span>Valor</span><strong>${brl(o.total)}</strong></div>${o.status==='Aguardando pagamento' ? `
+  <br>
+  <button onclick="pagar('${o.numero}')">GERAR PIX</button>
+  <button onclick="verificarPagamento('${o.numero}')">VERIFICAR PAGAMENTO</button>
+` : ''}</div>`).join('');
       }catch(e){$('ordersList').textContent='Não foi possível carregar seus pedidos.';}
 }
 async function verificarPagamento(numero){
@@ -71,7 +75,9 @@ async function verificarPagamento(numero){
     alert('Erro ao verificar pagamento: ' + e.message);
   }
 }
-async function pagar(){
+
+async function pagar(numero){
+
   $('payerr').textContent = '';
   $('pixout').classList.add('hidden');
 
@@ -82,9 +88,17 @@ async function pagar(){
       throw new Error('Nenhum pedido encontrado para pagamento.');
     }
 
-    const pedido =
-  pedidos.orders.find(p => p.status === 'Aguardando pagamento') ||
-  pedidos.orders[0];
+    const pedido = numero
+  ? pedidos.orders.find(p => p.numero === numero)
+  : pedidos.orders.find(p => p.status === 'Aguardando pagamento');
+
+if (!pedido) {
+  throw new Error('Nenhum pedido válido encontrado para pagamento.');
+}
+
+if (pedido.status !== 'Aguardando pagamento') {
+  throw new Error('Este pedido não está aguardando pagamento.');
+}
     const d = await api('/api/payment/pix', {
       method: 'POST',
       body: JSON.stringify({
