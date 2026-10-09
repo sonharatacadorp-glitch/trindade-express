@@ -809,12 +809,41 @@ app.post("/api/payment/pix", requireAuth, async (req, res) => {
   }
 
   try {
-    const { amount, email, reference } = req.body;
-    const value = Number(amount);
+    const { email, reference } = req.body;
 
-    if (!value || value <= 0 || !email) {
+    if (!reference || typeof reference !== "string" || !email ||
+        typeof email !== "string" || !email.trim()) {
       return res.status(400).json({
-        error: "Valor e e-mail são obrigatórios."
+        error: "Pedido e e-mail são obrigatórios."
+      });
+    }
+
+    const resultado = await db.query(
+      `SELECT total, status
+       FROM orders
+       WHERE numero = $1 AND user_id = $2`,
+      [reference, req.user.id]
+    );
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({
+        error: "Pedido não encontrado."
+      });
+    }
+
+    const pedido = resultado.rows[0];
+
+    if (pedido.status !== "Aguardando pagamento") {
+      return res.status(400).json({
+        error: "Este pedido não está aguardando pagamento."
+      });
+    }
+
+    const value = Number(pedido.total);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return res.status(400).json({
+        error: "Valor do pedido inválido."
       });
     }
 
